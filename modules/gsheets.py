@@ -31,9 +31,41 @@ def build_connection(creds_raw: str, sheet_url: str) -> tuple[gspread.Client, gs
 
 
 def build_connection_from_secrets() -> tuple[gspread.Client, gspread.Spreadsheet]:
-    """Return (client, spreadsheet) using credentials stored in st.secrets."""
+    """
+    Return (client, spreadsheet) using credentials stored in st.secrets.
+
+    Supports two formats in secrets.toml:
+
+    Format A — TOML native (recommended, no JSON escaping issues):
+        [gsheets]
+        url = "https://docs.google.com/..."
+        [gsheets_creds]
+        type = "service_account"
+        project_id = "..."
+        private_key = \"\"\"-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n\"\"\"
+        client_email = "..."
+        ... (all other fields from the JSON key file)
+
+    Format B — JSON string (legacy):
+        [gsheets]
+        url   = "https://docs.google.com/..."
+        creds = '{"type":"service_account",...}'
+    """
+    url = st.secrets["gsheets"]["url"]
+
+    # Format A: dedicated [gsheets_creds] TOML section (preferred)
+    if "gsheets_creds" in st.secrets:
+        creds_info = dict(st.secrets["gsheets_creds"])
+        # Streamlit may escape \n in private_key — normalize it
+        if "private_key" in creds_info:
+            creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+        creds  = Credentials.from_service_account_info(creds_info, scopes=GSHEETS_SCOPES)
+        client = gspread.authorize(creds)
+        sh     = client.open_by_url(url)
+        return client, sh
+
+    # Format B: JSON string under gsheets.creds (legacy fallback)
     creds_raw = st.secrets["gsheets"]["creds"]
-    url       = st.secrets["gsheets"]["url"]
     if not isinstance(creds_raw, str):
         creds_raw = json.dumps(dict(creds_raw))
     return build_connection(creds_raw, url)
