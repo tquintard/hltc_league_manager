@@ -101,9 +101,12 @@ def try_login_as_admin(creds_raw: str, sheet_url: str) -> tuple[bool, str]:
     Log in as site admin using raw GSheets JSON credentials.
     Creates/upserts an admin account in the users sheet if needed.
     Returns (success, error_message).
+    NOTE: deliberately avoids session_state during the login flow.
     """
     import json
-    from modules.gsheets import build_connection, open_all_worksheets, load_all, append_row, update_cells
+    import pandas as pd
+    from modules.gsheets import build_connection, open_all_worksheets, load_all
+    from config.settings import SHEET_SCHEMAS
 
     try:
         _, sh = build_connection(creds_raw, sheet_url)
@@ -115,29 +118,24 @@ def try_login_as_admin(creds_raw: str, sheet_url: str) -> tuple[bool, str]:
     worksheets = open_all_worksheets(sh)
     dfs        = load_all(sh)
 
-    # Seed or verify the admin account ─────────────────────────────────────
-    users_df = dfs["users"]
+    # Seed admin account on first connection ──────────────────────────────
+    users_df     = dfs["users"]
     admin_pseudo = "admin"
 
     if users_df.empty or admin_pseudo not in users_df["pseudo"].values:
-        # First-time setup: create admin account with a default password
-        default_pw = "changeme"
-        append_row("users", {
-            "pseudo":        admin_pseudo,
-            "password_hash": hash_password(default_pw),
-            "roles":         "admin,captain,player",
-            "display_name":  "Admin",
-        })
-        # Reload after insert
-        from modules.gsheets import reload_sheet
-        st.session_state.worksheets = worksheets
-        st.session_state.dfs        = dfs
-        reload_sheet("users")
-        dfs = st.session_state.dfs
-        st.session_state.worksheets = {}
-        st.session_state.dfs        = {}
+        # Write directly to the worksheet — session_state not yet available
+        users_ws = worksheets["users"]
+        users_ws.append_row([
+            admin_pseudo,
+            hash_password("changeme"),
+            "admin,captain,player",
+            "Admin",
+        ])
+        # Reload locally without touching session_state
+        records  = users_ws.get_all_records()
+        dfs["users"] = pd.DataFrame(records) if records else pd.DataFrame(columns=SHEET_SCHEMAS["users"])
 
-    row = dfs["users"][dfs["users"]["pseudo"] == admin_pseudo].iloc[0]
+    row          = dfs["users"][dfs["users"]["pseudo"] == admin_pseudo].iloc[0]
     roles        = [r.strip() for r in str(row.get("roles", "admin")).split(",") if r.strip()]
     display_name = str(row.get("display_name", "Admin"))
     login_user(admin_pseudo, roles, display_name, sh, worksheets, dfs)
